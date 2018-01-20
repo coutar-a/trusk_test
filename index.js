@@ -65,8 +65,8 @@ function generateEmployeeQuestion (nb) {
   };
 }
 
-function formDump() {
-  return  'Nom: ' + newTruskerForm['name'] + '\n' +
+function formDump () {
+  return 'Nom: ' + newTruskerForm['name'] + '\n' +
   'Société: ' + newTruskerForm['company'] + '\n' +
   'Nombre de camions : ' + newTruskerForm['truckCount'] + '\n' +
   'Détail des camions: ' + JSON.stringify(newTruskerForm['trucksDetails']) + '\n' +
@@ -129,8 +129,12 @@ function parseIntroQuestions (answers) {
   inquirer.prompt(nameQuestions).then(parseEmployeeQuestions);
 }
 
+function runFirstQuestionSet () {
+  inquirer.prompt(questions).then(parseIntroQuestions);
+}
+
 function resumeQuestionnaire (redisRes) {
-  // none of this is elegant - maybe redo it with a state machine ?
+  // none of this is elegant or extensible - maybe redo it with a state machine ?
   newTruskerForm = JSON.parse(redisRes);
   console.log('Nous avons été interrompus. Reprenons là où nous en étions.');
   console.log('Informations récupérées de la session interrompue :\n' + formDump());
@@ -143,10 +147,6 @@ function resumeQuestionnaire (redisRes) {
   } else {
     runFirstQuestionSet();
   }
-}
-
-function runFirstQuestionSet () {
-  inquirer.prompt(questions).then(parseIntroQuestions);
 }
 
 function runQuestions (skipRedisCheck) {
@@ -167,6 +167,7 @@ function runQuestions (skipRedisCheck) {
 
 runQuestions(false);
 
+// saving to redis in case of ctrl+c
 process.on('SIGINT', function () {
   if (Object.keys(newTruskerForm).length === 0 && newTruskerForm.constructor === Object) {
     process.exit(0);
