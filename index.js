@@ -1,9 +1,12 @@
 const inquirer = require('inquirer');
 const Promise = require('bluebird');
+const redis = require('redis');
+Promise.promisifyAll(redis.RedisClient.prototype);
+Promise.promisifyAll(redis.Multi.prototype);
 
-console.log('Bonjour ! Bienvenue chez Trusk. Pour commencer, quelques questions : ');
+const client = redis.createClient();
 
-var newTruskerForm;
+var newTruskerForm = {};
 
 // Input validation functions
 
@@ -62,15 +65,18 @@ function generateEmployeeQuestion (nb) {
   };
 }
 
-function generateValidationQuestion () {
-  var total = 'Voici les informations que vous nous avez fourni :\n' +
-  'Nom: ' + newTruskerForm['name'] + '\n' +
+function formDump() {
+  return  'Nom: ' + newTruskerForm['name'] + '\n' +
   'Société: ' + newTruskerForm['company'] + '\n' +
   'Nombre de camions : ' + newTruskerForm['truckCount'] + '\n' +
   'Détail des camions: ' + JSON.stringify(newTruskerForm['trucksDetails']) + '\n' +
   'Nombre d\'employés: ' + newTruskerForm['employeeCount'] + '\n' +
-  'Noms des employés: ' + JSON.stringify(newTruskerForm['employeeNames']) + '\n' +
-  'Les informations sont-elles valides ?';
+  'Noms des employés: ' + JSON.stringify(newTruskerForm['employeeNames']) + '\n';
+}
+
+function generateValidationQuestion () {
+  var total = 'Voici les informations que vous nous avez fourni :\n' +
+  formDump() + 'Les informations sont-elles valides ?';
   return [{
     type: 'confirm',
     name: 'infoConfirmation',
@@ -83,32 +89,92 @@ function helper (array) {
   return inquirer.prompt(array).then((result) => result);
 }
 
-function runQuestions () {
-  inquirer.prompt(questions).then(answers => {
-    newTruskerForm = answers;
-    var nameQuestions = [...Array(answers.employeeCount).keys()].map(x => generateEmployeeQuestion(x));
-    nameQuestions.push({type: 'input', name: 'truckCount', message: 'De combien de camions votre entreprise dispose-t-elle ?', validate: validateNumber});
-    inquirer.prompt(nameQuestions).then(names => {
-      newTruskerForm.truckCount = parseFloat(names.truckCount);
-      newTruskerForm.trucksDetails = [];
-      delete names.truckCount;
-      newTruskerForm.employeeNames = Object.keys(names).map(key => names[key]);
-      var truckQuestions = [...Array(answers.truckCount).keys()].map(x => generateTruckQuestions(x));
-      var askAllQuestions = Promise.resolve(truckQuestions).map(helper, {concurrency: 1});
-      askAllQuestions.then((test) => {
-        newTruskerForm.trucksDetails = test;
-        inquirer.prompt(generateValidationQuestion()).then(answer => {
-          if (answer.infoConfirmation) {
-            console.log('Merci pour votre patience. Vous êtes maintenant enregistrés et nous allons pouvoir commencer !');
-          } else {
-            console.log("Désolé de l'entendre ! Nous allons recommerncer.");
-            newTruskerForm = [];
-            runQuestions();
-          }
-        });
+function finalFormCheck (answers) {
+  if (answers) {
+    newTruskerForm.trucksDetails = answers;
+  }
+  inquirer.prompt(generateValidationQuestion()).then(answer => {
+    if (answer.infoConfirmation) {
+      client.set('form', 'undefined', (res) => {
+        console.log('Merci pour votre patience. Vous êtes maintenant enregistrés et nous allons pouvoir commencer !');
+        // brutal but efficient
+        process.exit(0);
       });
-    });
+    } else {
+      console.log("Désolé de l'entendre ! Nous allons recommencer.");
+      newTruskerForm = [];
+      runQuestions(true);
+    }
   });
 }
 
-runQuestions();
+function parseEmployeeQuestions (answers) {
+  if (answers) {
+    newTruskerForm.truckCount = parseFloat(answers.truckCount);
+    newTruskerForm.trucksDetails = [];
+    delete answers.truckCount;
+    newTruskerForm.employeeNames = Object.keys(answers).map(key => answers[key]);
+  }
+  var truckQuestions = [...Array(newTruskerForm.truckCount).keys()].map(x => generateTruckQuestions(x));
+  var askTruckQuestions = Promise.resolve(truckQuestions).map(helper, {concurrency: 1});
+  askTruckQuestions.then(finalFormCheck);
+}
+
+function parseIntroQuestions (answers) {
+  if (answers) {
+    newTruskerForm = answers;
+  }
+  var nameQuestions = [...Array(newTruskerForm.employeeCount).keys()].map(x => generateEmployeeQuestion(x));
+  nameQuestions.push({type: 'input', name: 'truckCount', message: 'De combien de camions votre entreprise dispose-t-elle ?', validate: validateNumber});
+  inquirer.prompt(nameQuestions).then(parseEmployeeQuestions);
+}
+
+function resumeQuestionnaire (redisRes) {
+  // none of this is elegant - maybe redo it with a state machine ?
+  newTruskerForm = JSON.parse(redisRes);
+  console.log('Nous avons été interrompus. Reprenons là où nous en étions.');
+  console.log('Informations récupérées de la session interrompue :\n' + formDump());
+  if (newTruskerForm.hasOwnProperty('employeeCount') && !(newTruskerForm.hasOwnProperty('truckCount'))) {
+    parseIntroQuestions(null);
+  } else if (newTruskerForm.hasOwnProperty('truckCount') && !(newTruskerForm.hasOwnProperty('truckDetails'))) {
+    parseEmployeeQuestions(null);
+  } else if (newTruskerForm.hasOwnProperty('truckCount') && (newTruskerForm.hasOwnProperty('truckDetails'))) {
+    finalFormCheck(null);
+  } else {
+    runFirstQuestionSet();
+  }
+}
+
+function runFirstQuestionSet () {
+  inquirer.prompt(questions).then(parseIntroQuestions);
+}
+
+function runQuestions (skipRedisCheck) {
+  console.log('Bonjour ! Bienvenue chez Trusk. Pour commencer, quelques questions : ');
+
+  if (skipRedisCheck === true) {
+    runFirstQuestionSet();
+  } else {
+    client.getAsync('form').then((res) => {
+      if (res === 'undefined') {
+        runFirstQuestionSet();
+      } else {
+        resumeQuestionnaire(res);
+      }
+    });
+  }
+}
+
+runQuestions(false);
+
+process.on('SIGINT', function () {
+  if (Object.keys(newTruskerForm).length === 0 && newTruskerForm.constructor === Object) {
+    process.exit(0);
+  }
+  client.set('form', JSON.stringify(newTruskerForm), (err, res) => {
+    if (err) {
+      console.log(err);
+    }
+    process.exit('0');
+  });
+});
