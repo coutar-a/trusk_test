@@ -95,7 +95,7 @@ function finalFormCheck (answers) {
   }
   inquirer.prompt(generateValidationQuestion()).then(answer => {
     if (answer.infoConfirmation) {
-      client.set('form', 'undefined', (res) => {
+      client.del('form', (res) => {
         console.log('Merci pour votre patience. Vous êtes maintenant enregistrés et nous allons pouvoir commencer !');
         // brutal but efficient
         process.exit(0);
@@ -103,7 +103,9 @@ function finalFormCheck (answers) {
     } else {
       console.log("Désolé de l'entendre ! Nous allons recommencer.");
       newTruskerForm = [];
-      runQuestions(true);
+      client.del('form', (res) => {
+        runQuestions(true);
+      });
     }
   });
 }
@@ -140,9 +142,9 @@ function resumeQuestionnaire (redisRes) {
   console.log('Informations récupérées de la session interrompue :\n' + formDump());
   if (newTruskerForm.hasOwnProperty('employeeCount') && !(newTruskerForm.hasOwnProperty('truckCount'))) {
     parseIntroQuestions(null);
-  } else if (newTruskerForm.hasOwnProperty('truckCount') && !(newTruskerForm.hasOwnProperty('truckDetails'))) {
+  } else if (newTruskerForm.hasOwnProperty('truckCount') && (!newTruskerForm.hasOwnProperty('trucksDetails'))) {
     parseEmployeeQuestions(null);
-  } else if (newTruskerForm.hasOwnProperty('truckCount') && (newTruskerForm.hasOwnProperty('truckDetails'))) {
+  } else if (newTruskerForm.hasOwnProperty('truckCount') && (newTruskerForm.hasOwnProperty('trucksDetails'))) {
     finalFormCheck(null);
   } else {
     runFirstQuestionSet();
@@ -156,7 +158,7 @@ function runQuestions (skipRedisCheck) {
     runFirstQuestionSet();
   } else {
     client.getAsync('form').then((res) => {
-      if (res === 'undefined') {
+      if (res === null) {
         runFirstQuestionSet();
       } else {
         resumeQuestionnaire(res);
