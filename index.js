@@ -140,7 +140,7 @@ function resumeQuestionnaire (redisRes) {
   newTruskerForm = JSON.parse(redisRes);
   console.log('Nous avons été interrompus. Reprenons là où nous en étions.');
   console.log('Informations récupérées de la session interrompue :\n' + formDump());
-  if (newTruskerForm.hasOwnProperty('employeeCount') && !(newTruskerForm.hasOwnProperty('truckCount'))) {
+  if (newTruskerForm.hasOwnProperty('employeeCount') && (!newTruskerForm.hasOwnProperty('truckCount'))) {
     parseIntroQuestions(null);
   } else if (newTruskerForm.hasOwnProperty('truckCount') && (!newTruskerForm.hasOwnProperty('trucksDetails'))) {
     parseEmployeeQuestions(null);
