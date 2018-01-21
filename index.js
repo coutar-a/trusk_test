@@ -4,8 +4,7 @@ const redis = require('redis');
 Promise.promisifyAll(redis.RedisClient.prototype);
 Promise.promisifyAll(redis.Multi.prototype);
 
-const client = redis.createClient();
-
+var redisAvailable = false;
 var newTruskerForm = {};
 
 // Input validation functions
@@ -151,33 +150,54 @@ function resumeQuestionnaire (redisRes) {
   }
 }
 
+// entry point - using retry_stragegy to handle the case where there is no local redis server available,
+// as client.on('error') fires constantly if that is the case
+const client = redis.createClient({retry_strategy: (options) => {
+  if (options.error && options.error.code === 'ECONNREFUSED') {
+    // End reconnecting on a specific error and flush all commands with
+    // a individual error
+    console.log('no redis');
+    redisAvailable = false;
+    runQuestions(true);
+  }
+}});
+
+client.on('connect', () => {
+  redisAvailable = true;
+  runQuestions(false);
+});
+
 function runQuestions (skipRedisCheck) {
   console.log('Bonjour ! Bienvenue chez Trusk. Pour commencer, quelques questions : ');
 
-  if (skipRedisCheck === true) {
+  if (skipRedisCheck === true || !redisAvailable) {
     runFirstQuestionSet();
   } else {
-    client.getAsync('form').then((res) => {
-      if (res === null) {
-        runFirstQuestionSet();
-      } else {
-        resumeQuestionnaire(res);
-      }
-    });
+    try {
+      client.getAsync('form').then((res) => {
+        if (res === null) {
+          runFirstQuestionSet();
+        } else {
+          resumeQuestionnaire(res);
+        }
+      });
+    } catch (error) {
+      redisAvailable = false;
+      runFirstQuestionSet();
+    }
   }
 }
-
-runQuestions(false);
 
 // saving to redis in case of ctrl+c
 process.on('SIGINT', function () {
   if (Object.keys(newTruskerForm).length === 0 && newTruskerForm.constructor === Object) {
     process.exit(0);
+  } else if (redisAvailable) {
+    client.set('form', JSON.stringify(newTruskerForm), (err, res) => {
+      if (err) {
+        console.log(err);
+      }
+      process.exit('0');
+    });
   }
-  client.set('form', JSON.stringify(newTruskerForm), (err, res) => {
-    if (err) {
-      console.log(err);
-    }
-    process.exit('0');
-  });
 });
